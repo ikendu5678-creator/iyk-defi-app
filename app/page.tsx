@@ -632,17 +632,17 @@ export default function Page() {
               )}
             </Panel>
 
-            {/* Emergency exit */}
-            {connected && stakedRaw > 0n && (
-              <Panel warn>
-                <SLabel text="⚠ Emergency Exit" color="#f87171" />
-                <p style={{ fontSize:13, color:"#64748b", margin:"0 0 14px", lineHeight:1.6 }}>
-                  Instantly unstake everything, bypassing cooldown.{" "}
-                  <strong style={{ color:"#f87171" }}>All pending rewards are permanently forfeited.</strong>
-                </p>
-                <Btn label="Emergency Exit — Forfeit Rewards" color="#7f1d1d" disabled={isLoading} onClick={emergencyExit} />
-              </Panel>
-            )}
+
+
+
+
+
+
+
+
+
+
+
 
             {/* How it works */}
             <Panel>
@@ -801,6 +801,19 @@ export default function Page() {
               </div>
             </Panel>
 
+
+            {/* Emergency Exit — Admin Only */}
+            <Panel warn>
+              <SLabel text="🚨 Emergency Exit (Admin Only)" color="#f87171" />
+              <p style={{ fontSize:13, color:"#64748b", margin:"0 0 6px", lineHeight:1.6 }}>
+                Force-unstake your own staked tokens instantly, bypassing cooldown.
+              </p>
+              <p style={{ fontSize:12, color:"#f87171", margin:"0 0 14px" }}>
+                ⚠ All pending rewards are permanently forfeited. Use only in emergencies.
+              </p>
+              <Btn label="Emergency Exit — Forfeit Rewards" color="#7f1d1d" disabled={isLoading || stakedRaw === 0n} onClick={emergencyExit} />
+              {stakedRaw === 0n && <div style={{ fontSize:12, color:"#334155", marginTop:8, textAlign:"center" as const }}>No staked balance to exit from.</div>}
+            </Panel>
             {/* Send tokens */}
             <Panel>
               <SLabel text="↗ Send Tokens" />
