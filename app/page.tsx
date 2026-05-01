@@ -293,6 +293,18 @@ export default function Page() {
   const [isKilled,    setIsKilled]    = useState(false);
   const [totalSupply, setTotalSupply] = useState<bigint>(0n);
 
+  // Emergency broadcast — admin sets, all users see
+  const [emergencyMode, setEmergencyMode] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("iyk_emergency") === "true";
+  });
+  const [emergencyMsg, setEmergencyMsg] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("iyk_emergency_msg") || "⚠️ Emergency maintenance in progress. Please do not stake or unstake until further notice.";
+  });
+  const [editingMsg, setEditingMsg] = useState(false);
+  const [draftMsg, setDraftMsg] = useState("");
+
   const [loading,     setLoading]     = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
@@ -311,6 +323,21 @@ export default function Page() {
 
   const notify      = (msg: string, kind: Notif["kind"]) => setNotif({ msg, kind });
   const adminNotify = (msg: string, kind: Notif["kind"]) => setAdminNotif({ msg, kind });
+
+  const broadcastEmergency = (msg: string) => {
+    localStorage.setItem("iyk_emergency", "true");
+    localStorage.setItem("iyk_emergency_msg", msg);
+    setEmergencyMode(true);
+    setEmergencyMsg(msg);
+    adminNotify("🚨 Emergency warning broadcast to all users!", "ok");
+  };
+
+  const clearEmergency = () => {
+    localStorage.removeItem("iyk_emergency");
+    localStorage.removeItem("iyk_emergency_msg");
+    setEmergencyMode(false);
+    adminNotify("✅ Emergency warning cleared. Users can see normal dashboard again.", "ok");
+  };
 
   // ── fetch ────────────────────────────────────────────────────────────────────
 
@@ -550,6 +577,22 @@ export default function Page() {
 
         {/* Underfunded banner */}
         {connected && <UnderfundedBanner earnedRaw={earnedRaw} poolRaw={poolRaw} />}
+
+        {/* Emergency broadcast banner — shown to ALL users when admin activates */}
+        {emergencyMode && (
+          <div style={{ background:"linear-gradient(135deg,#1c0f03,#1a0a0a)", border:"2px solid #dc2626", borderRadius:14, padding:"18px 20px", marginBottom:20, display:"flex", gap:14, animation:"emergencyPulse 2s ease-in-out infinite" }}>
+            <span style={{ fontSize:28, flexShrink:0 }}>🚨</span>
+            <div>
+              <div style={{ fontWeight:800, fontSize:16, color:"#f87171", marginBottom:6, textTransform:"uppercase" as const, letterSpacing:0.5 }}>
+                Emergency Notice
+              </div>
+              <div style={{ fontSize:14, color:"#fca5a5", lineHeight:1.7 }}>{emergencyMsg}</div>
+              <div style={{ marginTop:10, fontSize:12, color:"#7f1d1d", background:"#1c0a0a", border:"1px solid #7f1d1d", borderRadius:8, padding:"6px 12px", display:"inline-block" }}>
+                Posted by IYK DeFi Admin · Your funds are safe on-chain
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Tab switcher — admin only */}
         {isAdmin && connected && (
@@ -814,6 +857,55 @@ export default function Page() {
               <Btn label="Emergency Exit — Forfeit Rewards" color="#7f1d1d" disabled={isLoading || stakedRaw === 0n} onClick={emergencyExit} />
               {stakedRaw === 0n && <div style={{ fontSize:12, color:"#334155", marginTop:8, textAlign:"center" as const }}>No staked balance to exit from.</div>}
             </Panel>
+            {/* Emergency Broadcast */}
+            <Panel warn={emergencyMode}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+                <SLabel text="📢 Emergency Broadcast" color={emergencyMode?"#f87171":"#64748b"} />
+                {emergencyMode && (
+                  <span style={{ background:"#dc262622", border:"1px solid #dc2626", borderRadius:20, padding:"3px 10px", fontSize:11, color:"#f87171", fontWeight:700 }}>
+                    🔴 LIVE — Users can see this
+                  </span>
+                )}
+              </div>
+              <p style={{ fontSize:13, color:"#64748b", margin:"0 0 14px", lineHeight:1.6 }}>
+                {emergencyMode
+                  ? "Emergency warning is currently active and visible to all users."
+                  : "Broadcast an emergency warning to all users. Hidden by default until you activate it."}
+              </p>
+
+              {!emergencyMode ? (
+                <>
+                  <label style={{ fontSize:12, color:"#64748b", display:"block", marginBottom:6 }}>Warning Message</label>
+                  <textarea
+                    value={draftMsg || "⚠️ Emergency maintenance in progress. Please do not stake or unstake until further notice."}
+                    onChange={(e) => setDraftMsg(e.target.value)}
+                    rows={3}
+                    style={{ width:"100%", padding:"11px 14px", borderRadius:9, border:"1px solid #334155", background:"#0a0f1e", color:"white", fontSize:13, boxSizing:"border-box" as const, marginBottom:12, resize:"vertical" as const, fontFamily:"inherit" }}
+                  />
+                  <button onClick={() => broadcastEmergency(draftMsg || "⚠️ Emergency maintenance in progress. Please do not stake or unstake until further notice.")}
+                    style={{ width:"100%", padding:13, borderRadius:10, border:"none", background:"#dc2626", color:"white", fontWeight:700, fontSize:14, cursor:"pointer" }}>
+                    🚨 Broadcast Emergency Warning to All Users
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div style={{ background:"#0a0f1e", borderRadius:9, padding:"12px 14px", marginBottom:14, fontSize:13, color:"#fca5a5", lineHeight:1.6, border:"1px solid #7f1d1d" }}>
+                    "{emergencyMsg}"
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                    <button onClick={() => { setEditingMsg(true); setDraftMsg(emergencyMsg); setEmergencyMode(false); }}
+                      style={{ padding:11, borderRadius:9, border:"1px solid #334155", background:"transparent", color:"#94a3b8", fontWeight:600, fontSize:13, cursor:"pointer" }}>
+                      ✏ Edit Message
+                    </button>
+                    <button onClick={clearEmergency}
+                      style={{ padding:11, borderRadius:9, border:"none", background:"#166534", color:"white", fontWeight:700, fontSize:13, cursor:"pointer" }}>
+                      ✅ Clear Warning
+                    </button>
+                  </div>
+                </>
+              )}
+            </Panel>
+
             {/* Send tokens */}
             <Panel>
               <SLabel text="↗ Send Tokens" />
@@ -843,6 +935,7 @@ export default function Page() {
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes emergencyPulse { 0%,100%{border-color:#dc2626} 50%{border-color:#f87171} }
         button:hover:not(:disabled) { filter: brightness(1.1); }
         input:focus { outline: none; border-color: #3b82f6 !important; }
       `}</style>
