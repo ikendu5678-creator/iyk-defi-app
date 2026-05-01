@@ -267,6 +267,210 @@ function UnderfundedBanner({ earnedRaw, poolRaw }: { earnedRaw: bigint; poolRaw:
   );
 }
 
+
+// ── AI Staking Advisor ────────────────────────────────────────────────────────
+
+type AIMessage = { role: "user" | "assistant"; content: string };
+
+function AIAdvisor({ walletBal, stakedRaw, earnedRaw, poolRaw, rateRaw, totalSRaw, sufficient, isPaused, isKilled, isAdmin, coverPct, apr }: {
+  walletBal: bigint; stakedRaw: bigint; earnedRaw: bigint; poolRaw: bigint;
+  rateRaw: bigint; totalSRaw: bigint; sufficient: boolean | null;
+  isPaused: boolean; isKilled: boolean; isAdmin: boolean; coverPct: number; apr: string;
+}) {
+  const [open,     setOpen]     = useState(false);
+  const [messages, setMessages] = useState<AIMessage[]>([]);
+  const [input,    setInput]    = useState("");
+  const [thinking, setThinking] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages]);
+
+  const quickPrompts = isAdmin ? [
+    "When will the reward pool run dry?",
+    "Should I adjust the reward rate?",
+    "Draft an emergency message for users",
+    "Give me a health report of the protocol",
+  ] : [
+    "Should I stake now?",
+    "How much will I earn if I stake 1000 IYK for 30 days?",
+    "Is it safe to claim my rewards?",
+    "Explain my pending rewards",
+  ];
+
+  const buildContext = () => {
+    const fmtB = (b: bigint) => parseFloat(ethers.formatUnits(b, 18)).toFixed(4);
+    const poolRunoutDays = rateRaw > 0n && totalSRaw > 0n
+      ? (Number(poolRaw) / Number(rateRaw) / 86400).toFixed(1)
+      : "∞";
+    return `You are IYK AI, an expert DeFi staking assistant embedded in the IYK DeFi Protocol dashboard.
+You are helpful, concise, and honest. You always give actionable advice based on real on-chain data.
+Never make up numbers — only use the data provided below.
+Keep responses under 120 words unless asked for detail. Use bullet points for clarity.
+
+=== LIVE CONTRACT DATA ===
+Contract: 0xeca28fA84371e03D738700c4F24d5F069f912ACd (Sepolia testnet)
+Token: IYK (ERC20)
+Network status: ${isKilled ? "KILLED — contract shut down" : isPaused ? "PAUSED — staking suspended" : "ACTIVE"}
+Current APR: ${apr}
+Total staked: ${fmtB(totalSRaw)} IYK
+Reward rate: ${parseFloat(ethers.formatUnits(rateRaw, 18)).toFixed(8)} IYK/sec
+Reward pool balance: ${fmtB(poolRaw)} IYK
+Pool coverage: ${coverPct.toFixed(1)}%
+Pool sufficient: ${sufficient === null ? "unknown" : sufficient ? "yes" : "NO — UNDERFUNDED"}
+Estimated days until pool depletes: ${poolRunoutDays} days
+
+=== USER WALLET DATA ===
+Wallet IYK balance: ${fmtB(walletBal)} IYK
+Staked: ${fmtB(stakedRaw)} IYK
+Pending rewards: ${fmtB(earnedRaw)} IYK
+User role: ${isAdmin ? "ADMIN/OWNER" : "regular staker"}
+
+=== IMPORTANT CONTEXT ===
+- This is a Synthetix-style staking contract
+- Users must approve tokens before staking
+- There is an unstake cooldown period
+- Rewards come from the reward pool funded by the admin
+- If pool coverage < 100%, users CANNOT claim rewards`;
+  };
+
+  const sendMessage = async (userMsg: string) => {
+    if (!userMsg.trim() || thinking) return;
+    const newMessages: AIMessage[] = [...messages, { role:"user", content:userMsg }];
+    setMessages(newMessages);
+    setInput("");
+    setThinking(true);
+
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: buildContext(),
+          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+        }),
+      });
+      const data = await response.json();
+      const reply = data.content?.[0]?.text ?? "Sorry, I could not generate a response. Please try again.";
+      setMessages(prev => [...prev, { role:"assistant", content:reply }]);
+    } catch {
+      setMessages(prev => [...prev, { role:"assistant", content:"Connection error. Please check your network and try again." }]);
+    } finally {
+      setThinking(false);
+    }
+  };
+
+  return (
+    <>
+      {/* Floating button */}
+      <button onClick={() => setOpen(v => !v)} style={{
+        position:"fixed", bottom:28, right:28, zIndex:200,
+        width:58, height:58, borderRadius:"50%", border:"none",
+        background:"linear-gradient(135deg,#2563eb,#7c3aed)",
+        color:"white", fontSize:24, cursor:"pointer",
+        boxShadow:"0 4px 24px #2563eb66",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        transition:"transform 0.2s",
+      }} title="IYK AI Advisor">
+        {open ? "✕" : "🤖"}
+      </button>
+
+      {/* Chat panel */}
+      {open && (
+        <div style={{
+          position:"fixed", bottom:100, right:28, zIndex:200,
+          width:380, maxWidth:"calc(100vw - 48px)",
+          background:"#0d1526", border:"1px solid #1e3a5f",
+          borderRadius:18, boxShadow:"0 8px 48px #000a",
+          display:"flex", flexDirection:"column" as const,
+          maxHeight:"70vh",
+        }}>
+          {/* Header */}
+          <div style={{ background:"linear-gradient(135deg,#2563eb,#7c3aed)", borderRadius:"18px 18px 0 0", padding:"14px 18px", display:"flex", alignItems:"center", gap:10 }}>
+            <span style={{ fontSize:20 }}>🤖</span>
+            <div>
+              <div style={{ fontWeight:700, fontSize:14, color:"white" }}>IYK AI Advisor</div>
+              <div style={{ fontSize:11, color:"#bfdbfe" }}>Powered by Claude · Live contract data</div>
+            </div>
+            <div style={{ marginLeft:"auto", width:8, height:8, borderRadius:"50%", background:"#4ade80", boxShadow:"0 0 6px #4ade80" }} />
+          </div>
+
+          {/* Messages */}
+          <div style={{ flex:1, overflowY:"auto" as const, padding:"14px 16px", display:"flex", flexDirection:"column" as const, gap:10, minHeight:200, maxHeight:380 }}>
+            {messages.length === 0 && (
+              <div style={{ textAlign:"center" as const, padding:"20px 0" }}>
+                <div style={{ fontSize:32, marginBottom:8 }}>👋</div>
+                <div style={{ fontSize:13, color:"#94a3b8", marginBottom:16 }}>
+                  Ask me anything about your staking position, rewards, or protocol health.
+                </div>
+                <div style={{ display:"flex", flexDirection:"column" as const, gap:6 }}>
+                  {quickPrompts.map(q => (
+                    <button key={q} onClick={() => sendMessage(q)} style={{
+                      background:"#1e293b", border:"1px solid #334155", borderRadius:8,
+                      padding:"8px 12px", color:"#94a3b8", fontSize:12,
+                      cursor:"pointer", textAlign:"left" as const, lineHeight:1.4,
+                      transition:"border-color 0.15s",
+                    }}>{q}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {messages.map((m, i) => (
+              <div key={i} style={{ display:"flex", justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
+                <div style={{
+                  maxWidth:"85%", padding:"10px 13px", borderRadius:m.role==="user"?"14px 14px 4px 14px":"14px 14px 14px 4px",
+                  background:m.role==="user"?"linear-gradient(135deg,#2563eb,#7c3aed)":"#1e293b",
+                  color:"white", fontSize:13, lineHeight:1.6,
+                  border:m.role==="assistant"?"1px solid #1e3a5f":"none",
+                  whiteSpace:"pre-wrap" as const,
+                }}>
+                  {m.content}
+                </div>
+              </div>
+            ))}
+            {thinking && (
+              <div style={{ display:"flex", justifyContent:"flex-start" }}>
+                <div style={{ background:"#1e293b", border:"1px solid #1e3a5f", borderRadius:"14px 14px 14px 4px", padding:"10px 16px", fontSize:13, color:"#64748b" }}>
+                  <span style={{ animation:"thinking 1.2s ease-in-out infinite" }}>●</span>
+                  <span style={{ animation:"thinking 1.2s ease-in-out infinite 0.2s" }}> ●</span>
+                  <span style={{ animation:"thinking 1.2s ease-in-out infinite 0.4s" }}> ●</span>
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Input */}
+          <div style={{ padding:"12px 14px", borderTop:"1px solid #1e293b", display:"flex", gap:8 }}>
+            <input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); } }}
+              placeholder="Ask IYK AI…"
+              disabled={thinking}
+              style={{ flex:1, background:"#1e293b", border:"1px solid #334155", borderRadius:9, padding:"9px 12px", color:"white", fontSize:13, outline:"none" }}
+            />
+            <button onClick={() => sendMessage(input)} disabled={thinking || !input.trim()} style={{
+              padding:"9px 14px", borderRadius:9, border:"none",
+              background:thinking||!input.trim()?"#1e293b":"linear-gradient(135deg,#2563eb,#7c3aed)",
+              color:thinking||!input.trim()?"#475569":"white",
+              fontWeight:700, fontSize:13, cursor:thinking||!input.trim()?"not-allowed":"pointer",
+            }}>
+              {thinking ? "…" : "↑"}
+            </button>
+          </div>
+
+          {/* Footer */}
+          <div style={{ padding:"8px 16px 12px", fontSize:10, color:"#334155", textAlign:"center" as const }}>
+            Reads live on-chain data · Never shares your private keys
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function Page() {
@@ -933,8 +1137,19 @@ export default function Page() {
         )}
       </div>
 
+      {/* AI Advisor — floating chat button */}
+      {connected && (
+        <AIAdvisor
+          walletBal={walletBal} stakedRaw={stakedRaw} earnedRaw={earnedRaw}
+          poolRaw={poolRaw} rateRaw={rateRaw} totalSRaw={totalSRaw}
+          sufficient={sufficient} isPaused={isPaused} isKilled={isKilled}
+          isAdmin={isAdmin} coverPct={coverPct} apr={apr}
+        />
+      )}
+
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes thinking { 0%,100%{opacity:0.2} 50%{opacity:1} }
         @keyframes emergencyPulse { 0%,100%{border-color:#dc2626} 50%{border-color:#f87171} }
         button:hover:not(:disabled) { filter: brightness(1.1); }
         input:focus { outline: none; border-color: #3b82f6 !important; }
