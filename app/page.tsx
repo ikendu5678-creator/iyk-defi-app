@@ -11,6 +11,7 @@ const SEPOLIA_ID       = "0xaa36a7";
 
 const TOKEN_ABI = [
   "function balanceOf(address) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address, uint256) returns (bool)",
   "function transfer(address, uint256) returns (bool)",
   "function totalSupply() view returns (uint256)",
@@ -82,6 +83,35 @@ function decodeError(e: any): string {
   return (e?.message ?? "Transaction failed.").replace(/\(action=.*$/, "").slice(0, 140);
 }
 
+
+// ── Spec-required helpers ────────────────────────────────────────────────────
+
+/** Format token amount: bigint(18 dec) → "1,234.56" */
+function fmtToken(raw: bigint, dp = 2): string {
+  const n = parseFloat(ethers.formatUnits(raw, 18));
+  return n.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
+
+/** Format APR from basis points: 1245n → "12.45%" */
+function fmtAPRbps(bps: bigint): string {
+  return (Number(bps) / 100).toFixed(2) + "%";
+}
+
+/** Format coverage ratio: 0.982 → "98.2%" */
+function fmtCoverage(pool: bigint, owed: bigint): string {
+  if (owed === 0n) return "100.0%";
+  const ratio = Number(pool * 10000n / owed) / 100;
+  return Math.min(100, ratio).toFixed(1) + "%";
+}
+
+/** Tx state machine */
+type TxState = "idle" | "pending" | "success" | "error";
+const TX_MSG: Record<TxState, string> = {
+  idle:    "",
+  pending: "⏳ Waiting for confirmation...",
+  success: "✅ Transaction successful",
+  error:   "❌ Transaction failed",
+};
 function isValidAddr(a: string) {
   try { ethers.getAddress(a); return true; } catch { return false; }
 }
@@ -512,6 +542,15 @@ export default function Page() {
   const [loading,     setLoading]     = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
+  // ── Allowance tracking (approve flow spec) ──
+  const [allowanceRaw, setAllowanceRaw] = useState<bigint>(0n);
+
+  // ── Per-action tx states (transaction feedback spec) ──
+  const [txApprove,  setTxApprove]  = useState<TxState>("idle");
+  const [txStake,    setTxStake]    = useState<TxState>("idle");
+  const [txUnstake,  setTxUnstake]  = useState<TxState>("idle");
+  const [txClaim,    setTxClaim]    = useState<TxState>("idle");
+
   // inputs
   const [amount,      setAmount]      = useState("");
   const [fundAmt,     setFundAmt]     = useState("");
@@ -553,7 +592,7 @@ export default function Page() {
       const [
         wBal, staked, earned, start,
         rate, totalS, pool, cooldown,
-        suff, paused, killed, owner, supply,
+        suff, paused, killed, owner, supply, allowance,
       ] = await Promise.all([
         tc.balanceOf(addr),
         sc.stakedBalance(addr),
@@ -568,6 +607,7 @@ export default function Page() {
         sc.killed(),
         sc.owner(),
         tc.totalSupply(),
+        tc.allowance(addr, CONTRACT_ADDRESS),  // spec: allowance check
       ]);
 
       setWalletBal(wBal as bigint);
@@ -583,6 +623,7 @@ export default function Page() {
       setIsKilled(killed as boolean);
       setIsAdmin((owner as string).toLowerCase() === addr.toLowerCase());
       setTotalSupply(supply as bigint);
+      setAllowanceRaw(allowance as bigint);  // spec: track allowance
       setLastRefresh(new Date());
 
       if (!(suff as boolean) && (earned as bigint) > 0n) {
@@ -622,13 +663,14 @@ export default function Page() {
 
   // ── user actions ─────────────────────────────────────────────────────────────
 
+  // Generic admin tx helper (no tx-state needed for admin actions)
   const withTx = async (
     fn: () => Promise<any>,
     loadMsg: string,
     okMsg: string,
-    isAdmin = false,
+    isAdminAction = false,
   ) => {
-    const n = isAdmin ? adminNotify : notify;
+    const n = isAdminAction ? adminNotify : notify;
     n(loadMsg, "load");
     try {
       const tx = await fn();
@@ -638,29 +680,79 @@ export default function Page() {
     } catch (e: any) { n(decodeError(e), "err"); }
   };
 
-  const stake = () => withTx(
-    () => scRef.current!.stake(ethers.parseUnits(amount, 18)),
-    "Staking tokens…", "Staked! Rewards are accruing live. 🎉",
-  );
+  // ── Spec: per-action tx state handlers ──────────────────────────────────────
 
-  const unstake = () => {
-    const cd = cooldownLabel(startTs, cooldownSec);
-    if (cd.secs > 0) { notify(`Cooldown active — ${cd.label}.`, "err"); return; }
-    withTx(
-      () => scRef.current!.unstake(ethers.parseUnits(amount, 18)),
-      "Unstaking…", "Unstake successful!",
-    );
+  const approve = async () => {
+    if (!amtValid) return;
+    setTxApprove("pending");
+    try {
+      const tx = await tcRef.current!.approve(CONTRACT_ADDRESS, ethers.parseUnits(amount, 18));
+      await tx.wait();
+      setTxApprove("success");
+      await fetchAll(address);          // re-fetches allowance automatically
+      setTimeout(() => setTxApprove("idle"), 3000);
+    } catch (e: any) {
+      setTxApprove("error");
+      notify(decodeError(e), "err");
+      setTimeout(() => setTxApprove("idle"), 4000);
+    }
   };
 
-  const approve = () => withTx(
-    () => tcRef.current!.approve(CONTRACT_ADDRESS, ethers.parseUnits(amount, 18)),
-    "Approving tokens…", "Approved! Now click Stake.",
-  );
+  const stake = async () => {
+    if (!amtValid || isPaused) return;
+    setTxStake("pending");
+    try {
+      const tx = await scRef.current!.stake(ethers.parseUnits(amount, 18));
+      await tx.wait();
+      setTxStake("success");
+      setAmount("");
+      await fetchAll(address);
+      setTimeout(() => setTxStake("idle"), 3000);
+    } catch (e: any) {
+      setTxStake("error");
+      notify(decodeError(e), "err");
+      setTimeout(() => setTxStake("idle"), 4000);
+    }
+  };
 
-  const claim = () => {
+  const unstake = async () => {
+    const cd = cooldownLabel(startTs, cooldownSec);
+    if (cd.secs > 0) { notify(`Cooldown active — ${cd.label}.`, "err"); return; }
+    if (!amtValid) return;
+    setTxUnstake("pending");
+    try {
+      const tx = await scRef.current!.unstake(ethers.parseUnits(amount, 18));
+      await tx.wait();
+      setTxUnstake("success");
+      setAmount("");
+      await fetchAll(address);
+      setTimeout(() => setTxUnstake("idle"), 3000);
+    } catch (e: any) {
+      setTxUnstake("error");
+      notify(decodeError(e), "err");
+      setTimeout(() => setTxUnstake("idle"), 4000);
+    }
+  };
+
+  const claim = async () => {
+    // Spec: underfunded protection — prevent execution, not just disable button
     if (earnedRaw === 0n) { notify("No rewards to claim yet.", "err"); return; }
-    if (!sufficient)      { notify("pool_warning", "warn"); return; }
-    withTx(() => scRef.current!.claimRewards(), "Claiming rewards…", `Claimed ${fmt(earnedRaw, 4)} IYK! 🎉`);
+    if (!sufficient) {
+      notify("⚠️ Rewards cannot be claimed until the pool is funded.", "warn");
+      return;
+    }
+    setTxClaim("pending");
+    try {
+      const tx = await scRef.current!.claimRewards();
+      await tx.wait();
+      setTxClaim("success");
+      await fetchAll(address);
+      setTimeout(() => setTxClaim("idle"), 3000);
+    } catch (e: any) {
+      setTxClaim("error");
+      notify(decodeError(e), "err");
+      setTimeout(() => setTxClaim("idle"), 4000);
+    }
   };
 
   const emergencyExit = () => {
@@ -736,6 +828,11 @@ export default function Page() {
   const shortage    = earnedRaw > poolRaw ? earnedRaw - poolRaw : 0n;
   const coverPct    = earnedRaw === 0n ? 100 : Math.min(100, Number(poolRaw * 10000n / earnedRaw) / 100);
   const apr         = calcAPR(rateRaw, totalSRaw);
+
+  // Spec: approve flow — compare allowance with input amount
+  const amountRaw    = amtValid ? BigInt(Math.floor(Number(amount) * 1e18)) : 0n;
+  const needsApprove = amtValid && allowanceRaw < amountRaw;  // true → show Approve; false → show Stake
+  const anyTxPending = txApprove === "pending" || txStake === "pending" || txUnstake === "pending" || txClaim === "pending";
 
   const quickFill = (bal: bigint, setter: (v: string) => void) =>
     ["25%","50%","75%","Max"].map(lbl => (
@@ -828,8 +925,8 @@ export default function Page() {
                 </div>
 
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
-                  <Card label="Wallet Balance" value={`${fmt(walletBal, 2)} IYK`} color="#38bdf8" />
-                  <Card label="Staked"         value={`${fmt(stakedRaw, 2)} IYK`} color="#818cf8" />
+                  <Card label="Wallet Balance" value={`${fmtToken(walletBal, 2)} IYK`} color="#38bdf8" />
+                  <Card label="Staked"         value={`${fmtToken(stakedRaw, 2)} IYK`} color="#818cf8" />
                 </div>
 
                 {/* Live counter — full width */}
@@ -863,18 +960,64 @@ export default function Page() {
                 </div>
               )}
 
+              {/* Spec: Approve flow — auto-switch Approve ↔ Stake based on allowance */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
-                <Btn label="Approve" color="#7c3aed" disabled={isLoading||!connected||!amtValid} onClick={approve} />
-                <Btn label="Stake"   color="#2563eb" disabled={isLoading||!connected||!amtValid||isPaused} onClick={stake} />
-              </div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
-                <Btn label="Claim Rewards" color={canClaim?"#059669":"#1e3a2e"} disabled={isLoading||!connected||!canClaim} onClick={claim} />
-                <Btn label="Unstake"       color="#dc2626" disabled={isLoading||!connected||!amtValid||cd.secs>0} onClick={unstake} />
+                {needsApprove ? (
+                  <TxBtn
+                    label="Approve"
+                    txState={txApprove}
+                    color="#7c3aed"
+                    disabled={anyTxPending || !connected || !amtValid}
+                    onClick={approve}
+                  />
+                ) : (
+                  <TxBtn
+                    label="Stake"
+                    txState={txStake}
+                    color="#2563eb"
+                    disabled={anyTxPending || !connected || !amtValid || isPaused}
+                    onClick={stake}
+                  />
+                )}
+                <TxBtn
+                  label="Unstake"
+                  txState={txUnstake}
+                  color="#dc2626"
+                  disabled={anyTxPending || !connected || !amtValid || cd.secs > 0}
+                  onClick={unstake}
+                />
               </div>
 
-              {sufficient===false && connected && earnedRaw>0n && (
-                <div style={{ marginTop:12, background:"#1c0f03", border:"1px solid #78350f", borderRadius:9, padding:"10px 14px", fontSize:12, color:"#fbbf24", lineHeight:1.6 }}>
-                  ⚠️ <strong>Claim disabled.</strong> Reward pool needs {fmt(shortage, 2)} more IYK. Your {fmt(earnedRaw, 4)} IYK is safe on-chain.
+              {/* Allowance hint */}
+              {connected && amtValid && !needsApprove && (
+                <div style={{ fontSize:11, color:"#166534", marginBottom:10, display:"flex", alignItems:"center", gap:5 }}>
+                  <span>✓</span> Allowance sufficient — ready to stake
+                </div>
+              )}
+              {connected && amtValid && needsApprove && (
+                <div style={{ fontSize:11, color:"#ca8a04", marginBottom:10, display:"flex", alignItems:"center", gap:5 }}>
+                  <span>↑</span> Approve required before staking this amount
+                </div>
+              )}
+
+              {/* Spec: underfunded protection — disable + warning banner */}
+              <TxBtn
+                label="Claim Rewards"
+                txState={txClaim}
+                color={canClaim ? "#059669" : "#1e3a2e"}
+                disabled={anyTxPending || !connected || !canClaim}
+                onClick={claim}
+              />
+
+              {sufficient === false && connected && earnedRaw > 0n && (
+                <div style={{ marginTop:10, background:"#1c0f03", border:"1px solid #92400e", borderRadius:9, padding:"12px 14px", fontSize:13, color:"#fbbf24", lineHeight:1.6, display:"flex", gap:10, alignItems:"flex-start" }}>
+                  <span style={{ fontSize:18, flexShrink:0 }}>⚠️</span>
+                  <div>
+                    <strong>Rewards cannot be claimed until the pool is funded.</strong>
+                    <div style={{ fontSize:12, marginTop:4, color:"#92400e" }}>
+                      Pool needs {fmtToken(shortage, 2)} more IYK · Your {fmtToken(earnedRaw, 4)} IYK is safe on-chain.
+                    </div>
+                  </div>
                 </div>
               )}
             </Panel>
