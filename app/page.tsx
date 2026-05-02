@@ -105,13 +105,6 @@ function fmtCoverage(pool: bigint, owed: bigint): string {
 }
 
 /** Tx state machine */
-type TxState = "idle" | "pending" | "success" | "error";
-const TX_MSG: Record<TxState, string> = {
-  idle:    "",
-  pending: "⏳ Waiting for confirmation...",
-  success: "✅ Transaction successful",
-  error:   "❌ Transaction failed",
-};
 function isValidAddr(a: string) {
   try { ethers.getAddress(a); return true; } catch { return false; }
 }
@@ -192,6 +185,38 @@ function Panel({ children, warn = false, style = {} }: { children: React.ReactNo
       background: "#111827", borderRadius: 14, padding: "18px 20px", marginBottom: 16,
       border: `1px solid ${warn ? "#7f1d1d" : "#1e293b"}`, ...style,
     }}>{children}</div>
+  );
+}
+
+
+// ── TxBtn: button with built-in tx state feedback ────────────────────────────
+
+type TxState = "idle" | "pending" | "success" | "error";
+const TX_MSG: Record<TxState, string> = {
+  idle:    "",
+  pending: "⏳ Waiting...",
+  success: "✅ Done!",
+  error:   "❌ Failed",
+};
+
+function TxBtn({ label, txState, color, disabled, onClick }: {
+  label: string; txState: TxState; color: string; disabled: boolean; onClick: () => void;
+}) {
+  const isPending = txState === "pending";
+  const isSuccess = txState === "success";
+  const isError   = txState === "error";
+  const bg = isPending ? "#1e3a5f" : isSuccess ? "#166534" : isError ? "#7f1d1d" : disabled ? "#1e293b" : color;
+  const lbl = isPending ? TX_MSG.pending : isSuccess ? TX_MSG.success : isError ? TX_MSG.error : label;
+  return (
+    <button onClick={onClick} disabled={disabled || isPending} style={{
+      padding: "13px 0", borderRadius: 10, border: "none", width: "100%",
+      background: bg, color: disabled && !isPending && !isSuccess && !isError ? "#475569" : "white",
+      fontWeight: 700, fontSize: 13, cursor: disabled || isPending ? "not-allowed" : "pointer",
+      transition: "background 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+    }}>
+      {isPending && <span style={{ display:"inline-block", animation:"spin 1s linear infinite" }}>⟳</span>}
+      {lbl}
+    </button>
   );
 }
 
