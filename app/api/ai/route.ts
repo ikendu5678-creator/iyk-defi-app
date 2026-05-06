@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ text: "Please send a message first." });
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
     const body = {
       systemInstruction: { parts: [{ text: system }] },
