@@ -327,10 +327,11 @@ function UnderfundedBanner({ earnedRaw, poolRaw }: { earnedRaw: bigint; poolRaw:
 
 type AIMessage = { role: "user" | "assistant"; content: string };
 
-function AIAdvisor({ walletBal, stakedRaw, earnedRaw, poolRaw, rateRaw, totalSRaw, sufficient, isPaused, isKilled, isAdmin, coverPct, apr }: {
+function AIAdvisor({ walletBal, stakedRaw, earnedRaw, poolRaw, rateRaw, totalSRaw, sufficient, isPaused, isKilled, isAdmin, coverPct, apr, startTs, cooldownSec }: {
   walletBal: bigint; stakedRaw: bigint; earnedRaw: bigint; poolRaw: bigint;
   rateRaw: bigint; totalSRaw: bigint; sufficient: boolean | null;
   isPaused: boolean; isKilled: boolean; isAdmin: boolean; coverPct: number; apr: string;
+  startTs: number; cooldownSec: number;
 }) {
   const [open,     setOpen]     = useState(false);
   const [messages, setMessages] = useState<AIMessage[]>([]);
@@ -1402,6 +1403,7 @@ export default function Page() {
           poolRaw={poolRaw} rateRaw={rateRaw} totalSRaw={totalSRaw}
           sufficient={sufficient} isPaused={isPaused} isKilled={isKilled}
           isAdmin={isAdmin} coverPct={coverPct} apr={apr}
+          startTs={startTs} cooldownSec={cooldownSec}
         />
       )}
 
