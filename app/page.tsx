@@ -388,6 +388,107 @@ User role: ${isAdmin ? "ADMIN/OWNER" : "regular staker"}
 - If pool coverage < 100%, users CANNOT claim rewards`;
   };
 
+  // ── Rule-based AI — no API key needed, works everywhere ──────────────────────
+  const getRuleBasedReply = (q: string): string => {
+    const query   = q.toLowerCase();
+    const earned  = parseFloat(ethers.formatUnits(earnedRaw,  18));
+    const pool    = parseFloat(ethers.formatUnits(poolRaw,    18));
+    const staked  = parseFloat(ethers.formatUnits(stakedRaw,  18));
+    const wallet  = parseFloat(ethers.formatUnits(walletBal,  18));
+    const rate    = parseFloat(ethers.formatUnits(rateRaw,    18));
+    const total   = parseFloat(ethers.formatUnits(totalSRaw,  18));
+    const userShare   = total > 0 ? staked / total : 0;
+    const userRateDay = rate * userShare * 86400;
+    const poolDays    = rate > 0 ? pool / rate / 86400 : Infinity;
+    const aprNum      = parseFloat(apr.replace("%",""));
+
+    // ── Pool run dry ──
+    if (query.includes("run dry") || query.includes("pool last") || query.includes("how long") || query.includes("deplete")) {
+      if (rate === 0) return "The reward rate is currently 0, so the pool will not deplete.";
+      if (!isFinite(poolDays)) return "The pool will not run dry — no tokens are currently staked so no rewards are being paid out.";
+      if (poolDays < 1)  return `⚠️ The reward pool is critically low and may run dry in less than 1 day. Admin should fund it immediately.\n\nPool balance: ${pool.toFixed(2)} IYK\nBurn rate: ${(rate * 86400).toFixed(2)} IYK/day`;
+      if (poolDays < 7)  return `⚠️ The reward pool will run dry in approximately ${poolDays.toFixed(1)} days.\n\nPool balance: ${pool.toFixed(2)} IYK\nBurn rate: ${(rate * 86400).toFixed(2)} IYK/day\n\nAdmin should fund the pool soon.`;
+      return `The reward pool is estimated to last ${poolDays.toFixed(0)} days at the current rate.\n\n• Pool balance: ${pool.toFixed(2)} IYK\n• Daily burn rate: ${(rate * 86400).toFixed(4)} IYK/day\n• Status: ${poolDays > 30 ? "✅ Healthy" : "⚡ Monitor closely"}`;
+    }
+
+    // ── Should I stake ──
+    if (query.includes("should i stake") || query.includes("good time to stake") || query.includes("worth staking")) {
+      if (isKilled) return "❌ The contract has been shut down. Staking is not possible.";
+      if (isPaused) return "⏸ Staking is currently paused by the admin. Wait for it to resume before staking.";
+      if (!sufficient) return `⚠️ The reward pool is underfunded right now. You can still stake, but you won't be able to claim rewards until the admin funds the pool.\n\nCurrent APR: ${apr}`;
+      if (aprNum > 50) return `✅ Yes, this looks like a good time to stake.\n\n• APR: ${apr}\n• Pool status: Healthy (${poolDays.toFixed(0)} days remaining)\n• Your wallet: ${wallet.toFixed(2)} IYK available\n\nRemember to approve tokens first, then stake.`;
+      if (aprNum > 10) return `The current APR is ${apr} which is moderate. The pool is healthy with ${poolDays.toFixed(0)} days of rewards remaining. Staking is safe.`;
+      return `Current APR is ${apr}. Pool has ${poolDays.toFixed(0)} days of rewards. The decision is yours based on your risk appetite.`;
+    }
+
+    // ── Earnings projection ──
+    if (query.includes("earn") || query.includes("reward") && query.includes("if i stake") || query.includes("how much") || query.includes("profit")) {
+      const match = query.match(/(\d+[\d,]*\.?\d*)/);
+      const stakeAmt = match ? parseFloat(match[1].replace(/,/g, "")) : 1000;
+      if (total === 0) return `If you stake ${stakeAmt.toLocaleString()} IYK and you are the only staker, you would earn all global rewards.\n\nCurrent reward rate: ${(rate * 86400).toFixed(4)} IYK/day`;
+      const share   = stakeAmt / (total + stakeAmt);
+      const perDay  = rate * share * 86400;
+      const per30   = perDay * 30;
+      const per365  = perDay * 365;
+      return `If you stake ${stakeAmt.toLocaleString()} IYK:\n\n• Daily earnings: ~${perDay.toFixed(4)} IYK\n• Monthly (30d): ~${per30.toFixed(2)} IYK\n• Yearly (365d): ~${per365.toFixed(2)} IYK\n• Your pool share: ~${(share*100).toFixed(2)}%\n• Current APR: ${apr}\n\nNote: Actual earnings vary as total staked amount changes.`;
+    }
+
+    // ── Safe to claim ──
+    if (query.includes("safe to claim") || query.includes("can i claim") || query.includes("claim reward")) {
+      if (earned === 0) return "You have no pending rewards to claim yet. Stake tokens to start earning.";
+      if (!sufficient) return `❌ It is not safe to claim right now. The reward pool only has ${pool.toFixed(2)} IYK but you are owed ${earned.toFixed(4)} IYK.\n\nThe pool needs ${(earned - pool).toFixed(2)} more IYK. Wait for the admin to fund the pool.`;
+      return `✅ Yes, it is safe to claim your rewards.\n\n• Pending rewards: ${earned.toFixed(4)} IYK\n• Pool balance: ${pool.toFixed(2)} IYK\n• Coverage: ${coverPct.toFixed(1)}%\n\nClick "Claim Rewards" to receive your tokens.`;
+    }
+
+    // ── Explain rewards ──
+    if (query.includes("explain") || query.includes("how do reward") || query.includes("how does reward") || query.includes("pending reward")) {
+      if (staked === 0) return "You are not currently staking any tokens, so no rewards are accruing. Approve and stake IYK tokens to start earning.";
+      return `Here is how your rewards work:\n\n• You have ${staked.toFixed(2)} IYK staked\n• Your share of the pool: ${(userShare*100).toFixed(2)}%\n• You earn ~${userRateDay.toFixed(4)} IYK per day\n• Current pending: ${earned.toFixed(6)} IYK\n\nRewards accrue every second and are calculated proportionally to your share of the total staked amount (${total.toFixed(2)} IYK).`;
+    }
+
+    // ── APR / APY ──
+    if (query.includes("apr") || query.includes("apy") || query.includes("interest") || query.includes("rate")) {
+      const apy = (Math.pow(1 + aprNum/100/365, 365) - 1) * 100;
+      return `Current staking yield:\n\n• APR: ${apr}\n• APY (compounded daily): ${apy.toFixed(2)}%\n• Daily rate: ${(aprNum/365).toFixed(4)}%\n• Reward rate: ${(rate*86400).toFixed(4)} IYK/day (global)\n\nAPR may change if total staked amount increases or admin adjusts the reward rate.`;
+    }
+
+    // ── Risk ──
+    if (query.includes("risk") || query.includes("safe") || query.includes("scam") || query.includes("rugpull") || query.includes("trust")) {
+      return `IYK DeFi Protocol risk summary:\n\n✅ Smart contract is on Sepolia testnet\n✅ Your staked tokens are held in the contract\n✅ You can unstake anytime (after cooldown)\n⚠️ Reward pool depends on admin funding\n⚠️ Testnet — not real money\n\nMain risk: If the reward pool runs dry, you can still unstake your principal but cannot claim rewards until it is refunded.`;
+    }
+
+    // ── Admin: health report ──
+    if (query.includes("health") || query.includes("status") || query.includes("report") || query.includes("overview")) {
+      return `Protocol Health Report:\n\n• Total staked: ${total.toFixed(2)} IYK\n• Reward pool: ${pool.toFixed(2)} IYK\n• Pool coverage: ${coverPct.toFixed(1)}%\n• Pool runway: ${isFinite(poolDays) ? poolDays.toFixed(0)+" days" : "∞"}\n• APR: ${apr}\n• Status: ${isKilled?"💀 KILLED":isPaused?"⏸ PAUSED":!sufficient?"⚠️ UNDERFUNDED":"✅ HEALTHY"}\n• Your balance: ${wallet.toFixed(2)} IYK`;
+    }
+
+    // ── Admin: adjust rate ──
+    if (query.includes("adjust rate") || query.includes("reward rate") || query.includes("change rate")) {
+      const sustainability = total > 0 ? (pool / (rate * 86400)).toFixed(0) : "∞";
+      return `Reward Rate Analysis:\n\n• Current rate: ${(rate*86400).toFixed(4)} IYK/day (global)\n• Pool runway at current rate: ${sustainability} days\n• Total staked: ${total.toFixed(2)} IYK\n\nRecommendation: ${parseFloat(sustainability) < 14 ? "⚠️ Consider reducing rate or funding pool — runway is under 2 weeks." : parseFloat(sustainability) > 90 ? "Rate is sustainable. No immediate action needed." : "Monitor weekly. Pool is healthy for now."}`;
+    }
+
+    // ── Admin: draft emergency ──
+    if (query.includes("draft") || query.includes("emergency message") || query.includes("write message")) {
+      return `Here is a draft emergency message for your users:\n\n"⚠️ Emergency Maintenance Notice\n\nThe IYK DeFi Protocol is currently undergoing emergency maintenance. Staking and reward claims are temporarily suspended.\n\nYour staked tokens and earned rewards are safe on-chain and will be accessible once maintenance is complete.\n\nWe apologize for the inconvenience and will restore full service as soon as possible.\n\n— IYK DeFi Team"\n\nCopy this into the Emergency Broadcast panel in your Admin Dashboard.`;
+    }
+
+    // ── My position ──
+    if (query.includes("my position") || query.includes("my stake") || query.includes("my balance") || query.includes("my wallet")) {
+      return `Your current position:\n\n• Wallet balance: ${wallet.toFixed(2)} IYK\n• Staked: ${staked.toFixed(2)} IYK\n• Pending rewards: ${earned.toFixed(6)} IYK\n• Daily earnings: ~${userRateDay.toFixed(4)} IYK/day\n• Pool share: ${(userShare*100).toFixed(2)}%\n• Unstake cooldown: ${cd.secs > 0 ? cd.label : "Unlocked ✅"}`;
+    }
+
+    // ── Unstake ──
+    if (query.includes("unstake") || query.includes("withdraw")) {
+      if (staked === 0) return "You have no staked tokens to unstake.";
+      if (cd.secs > 0)  return `⏳ You cannot unstake yet. Cooldown active: ${cd.label}\n\nYou have ${staked.toFixed(2)} IYK staked. Once the cooldown expires, you can unstake freely.`;
+      return `✅ You can unstake now — no cooldown active.\n\nYou have ${staked.toFixed(2)} IYK staked. Enter the amount and click Unstake.\n\nNote: Unstaking does not affect your pending rewards of ${earned.toFixed(4)} IYK.`;
+    }
+
+    // ── Default ──
+    return `I can help you with:\n\n• "Should I stake now?" — staking recommendation\n• "How much will I earn if I stake 1000 IYK?" — earnings projection\n• "When will the pool run dry?" — pool runway\n• "Is it safe to claim?" — claim safety check\n• "Explain my rewards" — reward breakdown\n• "What is the APR?" — yield info\n• "What are the risks?" — risk summary\n• "Show my position" — your portfolio\n\nAsk me anything about your staking position!`;
+  };
+
   const sendMessage = async (userMsg: string) => {
     if (!userMsg.trim() || thinking) return;
     const newMessages: AIMessage[] = [...messages, { role:"user", content:userMsg }];
@@ -395,33 +496,12 @@ User role: ${isAdmin ? "ADMIN/OWNER" : "regular staker"}
     setInput("");
     setThinking(true);
 
-    try {
-      // Call our secure Next.js API route — API key stays server-side
-      const response = await fetch("/api/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system: buildContext(),
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-        }),
-      });
+    // Simulate thinking delay for natural feel
+    await new Promise(r => setTimeout(r, 800 + Math.random() * 600));
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.error ?? `HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-      const reply = data.text ?? "Sorry, I could not generate a response.";
-      setMessages(prev => [...prev, { role:"assistant", content:reply }]);
-    } catch (e: any) {
-      const msg = e?.message?.includes("GEMINI_API_KEY")
-        ? "AI not configured yet. Add GEMINI_API_KEY to Vercel environment variables."
-        : "Something went wrong. Please try again in a moment.";
-      setMessages(prev => [...prev, { role:"assistant", content:msg }]);
-    } finally {
-      setThinking(false);
-    }
+    const reply = getRuleBasedReply(userMsg);
+    setMessages(prev => [...prev, { role:"assistant", content:reply }]);
+    setThinking(false);
   };
 
   return (
