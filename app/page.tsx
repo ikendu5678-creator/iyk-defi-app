@@ -475,13 +475,15 @@ User role: ${isAdmin ? "ADMIN/OWNER" : "regular staker"}
 
     // ── My position ──
     if (query.includes("my position") || query.includes("my stake") || query.includes("my balance") || query.includes("my wallet")) {
-      return `Your current position:\n\n• Wallet balance: ${wallet.toFixed(2)} IYK\n• Staked: ${staked.toFixed(2)} IYK\n• Pending rewards: ${earned.toFixed(6)} IYK\n• Daily earnings: ~${userRateDay.toFixed(4)} IYK/day\n• Pool share: ${(userShare*100).toFixed(2)}%\n• Unstake cooldown: ${cd.secs > 0 ? cd.label : "Unlocked ✅"}`;
+      const cdInfo = cooldownLabel(startTs, cooldownSec);
+    return `Your current position:\n\n• Wallet balance: ${wallet.toFixed(2)} IYK\n• Staked: ${staked.toFixed(2)} IYK\n• Pending rewards: ${earned.toFixed(6)} IYK\n• Daily earnings: ~${userRateDay.toFixed(4)} IYK/day\n• Pool share: ${(userShare*100).toFixed(2)}%\n• Unstake cooldown: ${cdInfo.secs > 0 ? cdInfo.label : "Unlocked ✅"}`;
     }
 
     // ── Unstake ──
     if (query.includes("unstake") || query.includes("withdraw")) {
       if (staked === 0) return "You have no staked tokens to unstake.";
-      if (cd.secs > 0)  return `⏳ You cannot unstake yet. Cooldown active: ${cd.label}\n\nYou have ${staked.toFixed(2)} IYK staked. Once the cooldown expires, you can unstake freely.`;
+      const cdUnstake = cooldownLabel(startTs, cooldownSec);
+      if (cdUnstake.secs > 0)  return `⏳ You cannot unstake yet. Cooldown active: ${cdUnstake.label}\n\nYou have ${staked.toFixed(2)} IYK staked. Once the cooldown expires, you can unstake freely.`;
       return `✅ You can unstake now — no cooldown active.\n\nYou have ${staked.toFixed(2)} IYK staked. Enter the amount and click Unstake.\n\nNote: Unstaking does not affect your pending rewards of ${earned.toFixed(4)} IYK.`;
     }
 
