@@ -396,21 +396,29 @@ User role: ${isAdmin ? "ADMIN/OWNER" : "regular staker"}
     setThinking(true);
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      // Call our secure Next.js API route — API key stays server-side
+      const response = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
           system: buildContext(),
           messages: newMessages.map(m => ({ role: m.role, content: m.content })),
         }),
       });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error ?? `HTTP ${response.status}`);
+      }
+
       const data = await response.json();
-      const reply = data.content?.[0]?.text ?? "Sorry, I could not generate a response. Please try again.";
+      const reply = data.text ?? "Sorry, I could not generate a response.";
       setMessages(prev => [...prev, { role:"assistant", content:reply }]);
-    } catch {
-      setMessages(prev => [...prev, { role:"assistant", content:"Connection error. Please check your network and try again." }]);
+    } catch (e: any) {
+      const msg = e?.message?.includes("GEMINI_API_KEY")
+        ? "AI not configured yet. Add GEMINI_API_KEY to Vercel environment variables."
+        : "Something went wrong. Please try again in a moment.";
+      setMessages(prev => [...prev, { role:"assistant", content:msg }]);
     } finally {
       setThinking(false);
     }
@@ -446,7 +454,7 @@ User role: ${isAdmin ? "ADMIN/OWNER" : "regular staker"}
             <span style={{ fontSize:20 }}>🤖</span>
             <div>
               <div style={{ fontWeight:700, fontSize:14, color:"white" }}>IYK AI Advisor</div>
-              <div style={{ fontSize:11, color:"#bfdbfe" }}>Powered by Claude · Live contract data</div>
+              <div style={{ fontSize:11, color:"#bfdbfe" }}>Powered by Gemini · Live contract data</div>
             </div>
             <div style={{ marginLeft:"auto", width:8, height:8, borderRadius:"50%", background:"#4ade80", boxShadow:"0 0 6px #4ade80" }} />
           </div>
@@ -518,7 +526,7 @@ User role: ${isAdmin ? "ADMIN/OWNER" : "regular staker"}
 
           {/* Footer */}
           <div style={{ padding:"8px 16px 12px", fontSize:10, color:"#334155", textAlign:"center" as const }}>
-            Reads live on-chain data · Never shares your private keys
+            Powered by Gemini · Reads live on-chain data · Free tier
           </div>
         </div>
       )}
